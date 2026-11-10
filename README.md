@@ -18,10 +18,10 @@ the **noiseless** composite of the points each method chose. If your
 implementations follow the same protocol, the numbers are directly
 comparable with the reference results below.
 
-Two further reference baselines — DIRECT and CMA-ES
-(`classic_standalone.py`) — are included under the identical
-protocol, giving a six-method reference table (see "Expected
-results").
+Three further reference baselines — DIRECT and CMA-ES
+(`classic_standalone.py`) and RF-mean (`rf_standalone.py`) — are
+included under the identical protocol, giving a seven-method
+reference table (see "Expected results").
 
 The NN-inverse method specification is in
 `nn-inverse-variants-handoff.md` (§7–§10 for the three methods, §4 for
@@ -36,8 +36,9 @@ code (see "Reference BO" below).
 | `bo_standalone.py` | The reference GP-BO baseline, extracted from the original `combo_compare.py` (`run_gp` + helpers). Writes `bo_results.json`. |
 | `gen2_standalone.py` | The three tandem NN-inverse methods (inv-scalar / inv-vector / inv-eps), shared machinery, offline diagnostics, reporting. Writes `gen2_results.json`. |
 | `classic_standalone.py` | The two classic baselines — DIRECT (scipy) and CMA-ES (pycma) — extracted from the original `combo_compare.py`. Writes `classic_results.json`. |
-| `bo_results.json` / `gen2_results.json` / `classic_results.json` | Outputs of the verification runs of **this package** (see "Expected results"). Your runs should reproduce these numbers exactly. |
-| `bo_progress.png` / `gen2_progress.png` / `classic_progress.png` | Progress plots from the same verification runs (each script's plot combines all methods whose results JSONs are present). |
+| `rf_standalone.py` | The random-forest baseline (RF-mean), extracted from the original `combo_compare.py`. Writes `rf_results.json`. |
+| `bo_results.json` / `gen2_results.json` / `classic_results.json` / `rf_results.json` | Outputs of the verification runs of **this package** (see "Expected results"). Your runs should reproduce these numbers exactly. |
+| `bo_progress.png` / `gen2_progress.png` / `classic_progress.png` / `rf_progress.png` | Progress plots from the same verification runs (each script's plot combines all methods whose results JSONs are present). |
 | `gen2_results_statistical_check.json` | An earlier verification run of the NN package before determinism was enforced — kept as evidence that the package agrees statistically with the original experiment (see below). |
 
 ## How to run
@@ -46,6 +47,7 @@ code (see "Reference BO" below).
 python bo_standalone.py      # ~1 min;  needs scikit-learn, scipy
 python gen2_standalone.py    # ~16 min on a 4-thread CPU; needs torch
 python classic_standalone.py # seconds of compute; needs scipy, pycma
+python rf_standalone.py      # ~1 min;  needs scikit-learn
 ```
 
 - Results are checkpointed to the respective JSON file after every
@@ -61,12 +63,14 @@ noise, torch training, batch sampling, candidate pools) is seeded.
 Fresh-process re-runs of single seeds reproduced their finals to all
 printed digits (GP-BO seed 301: 2.2732128384595978; inv-vector seed
 301: 3.105866816072553; DIRECT seed 302: 1.851128988753784; CMA-ES
-seed 302: 2.368600805271987). Expected output of full runs:
+seed 302: 2.368600805271987; RF-mean seed 301: 2.2732128384595978).
+Expected output of full runs:
 
 | method | mean final | SE | per-seed finals (seeds 300–303) |
 |---|---|---|---|
 | inv-vector | **2.713** | 0.144 | 2.487 / 3.106 / 2.754 / 2.505 |
 | CMA-ES | 2.316 | 0.161 | 2.455 / 1.854 / 2.369 / 2.588 |
+| RF-mean | 2.264 | 0.013 | 2.229 / 2.273 / 2.262 / 2.291 |
 | GP-BO (reference) | 2.235 | 0.030 | 2.158 / 2.273 / 2.216 / 2.291 |
 | inv-eps | 2.183 | 0.201 | 1.670 / 2.071 / 2.572 / 2.419 |
 | DIRECT | 2.177 | 0.137 | 2.270 / 2.088 / 1.851 / 2.499 |
@@ -147,6 +151,34 @@ observing only the noisy scalar composite:
 In the original hybrid-round experiment these scored CMA-ES 2.312
 and DIRECT 2.211 — the package's 2.316 / 2.177 agree statistically.
 
+## Tree baseline (`rf_standalone.py`)
+
+**RF-mean** — the GP-BO baseline's pool machinery with the surrogate
+swapped: a `RandomForestRegressor` (400 trees, `min_samples_leaf=2`,
+`random_state` set per round), and the batch chosen by **predicted
+mean only** over the same fresh 20,000-point pool per round. Pure
+exploitation — no uncertainty, no acquisition function. (An RF-EI
+variant using tree-to-tree variance as uncertainty was tested in the
+earlier 6-parameter experiment and scored worse than RF-mean, 1.192
+vs 1.440; it is not included.) It observes only the noisy scalar
+composite. Same single deviation as elsewhere: crc32-seeded noise
+stream instead of `hash()`.
+
+Two things worth knowing before comparing its numbers:
+
+- In the original hybrid round RF-mean scored 2.161; the package's
+  2.264 is the largest stream-to-stream deviation among the
+  baselines, but it is within the envelope the original rounds
+  themselves showed (the identical GP-BO code scored 2.183–2.264
+  across rounds purely from noise-stream differences).
+- RF-mean's seed-301 and seed-303 finals are digit-identical to
+  GP-BO's. This is **not** a copy bug — it was checked at the
+  coordinate level: both pool-greedy methods, drawing on identical
+  per-round pools, independently evaluated the exact same best
+  point, while their archives and noise-chasing values differ
+  (0.44 vs 0.57 on seed 301). The same phenomenon occurred, and was
+  verified the same way, in the original 10-parameter experiment.
+
 ## Relationship to the original experiments (read before comparing numbers)
 
 Original runs reported: inv-vector 2.694 ± 0.057, inv-eps
@@ -164,10 +196,11 @@ algorithms are identical, but seeding was made deterministic:
    code does not reproduce its own digits between processes.
 
 Because of this, the package's exact finals differ from the original
-runs'; they agree **statistically** — same ordering
-(inv-vector > GP-BO ≈ inv-eps > inv-scalar), same spread pattern
-(scalar wide and bimodal, vector tight, GP tightest), same diagnostic
-structure. An intermediate verification run of the NN package with
+runs'; they agree **statistically** — same ordering pattern
+(inv-vector clearly on top; CMA-ES / RF-mean / GP-BO / DIRECT /
+inv-eps clustered within ~0.15 of each other; inv-scalar last), same
+spread pattern (scalar wide and bimodal, vector tight, GP and RF
+tightest), same diagnostic structure. An intermediate verification run of the NN package with
 the original (unseeded) sampling is preserved in
 `gen2_results_statistical_check.json` (inv-vector 2.517, inv-eps
 2.467, inv-scalar 2.017) as a second statistical sample.
@@ -175,8 +208,8 @@ the original (unseeded) sampling is preserved in
 ## Scope
 
 - Every method in this package (the three NN-inverse methods, GP-BO,
-  DIRECT, CMA-ES) is a standalone closed loop; nothing here combines
-  methods. The DIRECT→GP-box hybrid figure (2.427) sometimes quoted
+  DIRECT, CMA-ES, RF-mean) is a standalone closed loop; nothing here
+  combines methods. The DIRECT→GP-box hybrid figure (2.427) sometimes quoted
   alongside these results comes from a separate hybrid experiment
   and is **not** part of this package.
 - Claims are scoped to this benchmark and these implementations:
